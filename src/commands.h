@@ -14,9 +14,10 @@ void cmd_init(int argc, char **argv, const char *tries_path);
 zstr cmd_clone(int argc, char **argv, const char *tries_path);
 zstr cmd_worktree(int argc, char **argv, const char *tries_path);
 zstr cmd_selector(int argc, char **argv, const char *tries_path, TestParams *test);
+zstr cmd_fork(int argc, char **argv, const char *tries_path, bool preserve_history, TestParams *test);
 
 // Route subcommands (for exec mode)
-zstr cmd_route(int argc, char **argv, const char *tries_path, TestParams *test);
+zstr cmd_route(int argc, char **argv, const char *tries_path, bool preserve_history, TestParams *test);
 
 // Execute or print a script
 // exec_mode: true = print with header, false = execute via bash

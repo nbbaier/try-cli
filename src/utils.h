@@ -38,4 +38,15 @@ zstr normalize_dir_name(const char *name);
 // Check if name contains only valid directory name characters
 bool is_valid_dir_name(const char *name);
 
+typedef struct {
+  vec_zstr patterns;
+  bool valid;
+} GitignorePatterns;
+
+GitignorePatterns parse_gitignore(const char *dir_path);
+void free_gitignore_patterns(GitignorePatterns *patterns);
+bool should_skip_path(const char *path, const char *base_path, const GitignorePatterns *patterns);
+int copy_directory(const char *src, const char *dest, bool respect_gitignore);
+zstr generate_fork_name(const char *source_name, const char *tries_path);
+
 #endif // UTILS_H

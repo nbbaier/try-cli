@@ -57,6 +57,12 @@ static void print_help(void) {
   zstr_cat(&help, "\n");
 
   zstr_cat(&help, "  ");
+  tui_zstr_printf(&help, TUI_BOLD, "try fork");
+  zstr_cat(&help, " [query]       ");
+  tui_zstr_printf(&help, TUI_DIM, "Fork an existing try");
+  zstr_cat(&help, "\n");
+
+  zstr_cat(&help, "  ");
   tui_zstr_printf(&help, TUI_BOLD, "try worktree");
   zstr_cat(&help, " <name>  ");
   tui_zstr_printf(&help, TUI_DIM, "Create worktree from current git repo");
@@ -104,6 +110,10 @@ static void print_help(void) {
   tui_zstr_printf(&help, ANSI_BRIGHT_BLUE, "# shorthand for clone");
   zstr_cat(&help, "\n");
 
+  zstr_cat(&help, "  try fork my-project                              ");
+  tui_zstr_printf(&help, ANSI_BRIGHT_BLUE, "# fork 'my-project' try");
+  zstr_cat(&help, "\n");
+
   zstr_cat(&help, "  try ./my-project worktree feature                ");
   tui_zstr_printf(&help, ANSI_BRIGHT_BLUE, "# YYYY-MM-DD-feature");
   zstr_cat(&help, "\n");
@@ -144,6 +154,7 @@ int main(int argc, char **argv) {
   // Testing parameters (only used for automated tests)
   TestParams test = {0};
   bool exec_mode = false;
+  bool preserve_history = false;
 
   // Parse arguments - options can appear anywhere
   for (int i = 1; i < argc; i++) {
@@ -167,6 +178,14 @@ int main(int argc, char **argv) {
     }
     if (strcmp(arg, "--and-exit") == 0) {
       test.render_once = true;
+      continue;
+    }
+    if (strcmp(arg, "--preserve-history") == 0) {
+      preserve_history = true;
+      continue;
+    }
+    if (strcmp(arg, "--fresh-repo") == 0) {
+      preserve_history = false;
       continue;
     }
 
@@ -223,9 +242,17 @@ int main(int argc, char **argv) {
     // Exec mode - route subcommand and print script
     exec_mode = true;
     Z_CLEANUP(zstr_free) zstr script = cmd_route(
-        (int)cmd_args.length - 1, cmd_args.data + 1, path_cstr, &test);
+        (int)cmd_args.length - 1, cmd_args.data + 1, path_cstr, preserve_history, &test);
     if (zstr_is_empty(&script)) {
       return 1; // Error or special case (like init)
+    }
+    return run_script(zstr_cstr(&script), exec_mode);
+  } else if (strcmp(command, "fork") == 0) {
+    // Direct mode fork
+    Z_CLEANUP(zstr_free) zstr script = cmd_fork(
+        (int)cmd_args.length - 1, cmd_args.data + 1, path_cstr, preserve_history, &test);
+    if (zstr_is_empty(&script)) {
+      return 1;
     }
     return run_script(zstr_cstr(&script), exec_mode);
   } else if (strcmp(command, "cd") == 0) {

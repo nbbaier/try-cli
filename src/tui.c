@@ -486,7 +486,7 @@ static zstr render_rename_dialog(TryEntry *entry, TestParams *test) {
   return result;
 }
 
-static void render(const char *base_path) {
+static void render(const char *base_path, const char *prompt) {
   (void)base_path;
   int rows, cols;
   get_window_size(&rows, &cols);
@@ -496,7 +496,7 @@ static void render(const char *base_path) {
 
   // Header
   TuiStyleString line = tui_screen_line(&t);
-  tui_print(&line, TUI_H1, "🏠 Try Directory Selection");
+  tui_print(&line, TUI_H1, prompt ? prompt : "🏠 Try Directory Selection");
   tui_screen_write_truncated(&t, &line, "… ");
 
   line = tui_screen_line(&t);
@@ -618,6 +618,7 @@ static void render(const char *base_path) {
 
 SelectionResult run_selector(const char *base_path,
                              const char *initial_filter,
+                             const char *custom_prompt,
                              TestParams *test) {
   // Initialize filter input
   if (zstr_len(&filter_input.text) == 0 && !filter_input.text.is_long) {
@@ -638,7 +639,7 @@ SelectionResult run_selector(const char *base_path,
 
   // Test mode: render once and exit (only if no keys to inject)
   if (is_test && test->render_once && !test->inject_keys) {
-    render(base_path);
+    render(base_path, custom_prompt);
     SelectionResult result = {.type = ACTION_CANCEL, .path = zstr_init()};
     return result;
   }
@@ -662,7 +663,7 @@ SelectionResult run_selector(const char *base_path,
 
   while (1) {
     if (!is_test || !test->inject_keys) {
-      render(base_path);
+      render(base_path, custom_prompt);
     }
 
     // Read key from injected keys or real input
@@ -682,7 +683,7 @@ SelectionResult run_selector(const char *base_path,
       // End of input (or end of test keys)
       // If we were in render-once mode with keys, render final state now
       if (is_test && test->render_once) {
-        render(base_path);
+        render(base_path, custom_prompt);
       }
       break;
     }
