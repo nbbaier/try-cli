@@ -8,11 +8,15 @@
 
 #include "commands.h"
 #include "config.h"
+#include "git.h"
+#include "fuzzy.h"
 #include "tui.h"
 #include "utils.h"
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -236,6 +240,14 @@ static zstr build_rename_script(const char *base_path, const char *old_name, con
   return script;
 }
 
+static zstr build_fork_script(const char *fork_path) {
+  zstr script = zstr_init();
+  Z_CLEANUP(zstr_free) zstr escaped_path = shell_escape(fork_path);
+  zstr_fmt(&script, "  cd %s && \\\n", zstr_cstr(&escaped_path));
+  zstr_fmt(&script, "  printf '%%s\\n' %s\n", zstr_cstr(&escaped_path));
+  return script;
+}
+
 // Helper to generate date-prefixed directory name for clone
 // URL format: https://github.com/user/repo.git -> 2025-11-30-user-repo
 //             git@github.com:user/repo.git    -> 2025-11-30-user-repo
@@ -391,22 +403,36 @@ void cmd_init(int argc, char **argv, const char *tries_path) {
     // Fish shell version
     printf(
       "function try\n"
-      "  set -l out (%s exec --path %s $argv 2>/dev/tty)\n"
-      "  or begin; echo $out; return $status; end\n"
-      "  eval $out\n"
+      "  switch $argv[1]\n"
+      "    case fork\n"
+      "      eval (%s exec --path %s _fork $argv[2..-1] 2>/dev/tty | string collect)\n"
+      "    case '*'\n"
+      "      set -l out (%s exec --path %s $argv 2>/dev/tty)\n"
+      "      or begin; echo $out; return $status; end\n"
+      "      eval $out\n"
+      "  end\n"
       "end\n",
+      zstr_cstr(&escaped_self), zstr_cstr(&escaped_tries),
       zstr_cstr(&escaped_self), zstr_cstr(&escaped_tries));
   } else {
     // Bash/Zsh version
     printf(
       "try() {\n"
-      "  local out\n"
-      "  out=$(%s exec --path %s \"$@\" 2>/dev/tty) || {\n"
-      "    echo \"$out\"\n"
-      "    return $?\n"
-      "  }\n"
-      "  eval \"$out\"\n"
+      "  case \"$1\" in\n"
+      "    fork)\n"
+      "      eval \"$(%s exec --path %s _fork \"${@:2}\" 2>/dev/tty)\"\n"
+      "      ;;\n"
+      "    *)\n"
+      "      local out\n"
+      "      out=$(%s exec --path %s \"$@\" 2>/dev/tty) || {\n"
+      "        echo \"$out\"\n"
+      "        return $?\n"
+      "      }\n"
+      "      eval \"$out\"\n"
+      "      ;;\n"
+      "  esac\n"
       "}\n",
+      zstr_cstr(&escaped_self), zstr_cstr(&escaped_tries),
       zstr_cstr(&escaped_self), zstr_cstr(&escaped_tries));
   }
 
@@ -474,7 +500,7 @@ zstr cmd_worktree(int argc, char **argv, const char *tries_path) {
 zstr cmd_selector(int argc, char **argv, const char *tries_path, TestParams *test) {
   const char *initial_filter = (argc > 0) ? argv[0] : NULL;
 
-  SelectionResult result = run_selector(tries_path, initial_filter, test);
+  SelectionResult result = run_selector(tries_path, initial_filter, NULL, test);
 
   zstr script = zstr_init();
 
@@ -506,10 +532,143 @@ zstr cmd_selector(int argc, char **argv, const char *tries_path, TestParams *tes
 }
 
 // ============================================================================
+// Fork command - returns script
+// ============================================================================
+
+// Generate vector implementation for TryEntry (needed for fuzzy matching)
+Z_VEC_GENERATE_IMPL(TryEntry, TryEntry)
+
+zstr cmd_fork(int argc, char **argv, const char *tries_path, bool preserve_history, TestParams *test) {
+  const char *query = (argc > 0) ? argv[0] : NULL;
+  zstr source_path = zstr_init();
+  zstr source_name = zstr_init();
+
+  if (!query) {
+    // Interactive selector
+    SelectionResult result = run_selector(tries_path, NULL, "Select try to fork:", test);
+    if (result.type == ACTION_CD) {
+      source_path = result.path;
+      // Extract name from path
+      const char *last_slash = strrchr(zstr_cstr(&source_path), '/');
+      source_name = zstr_from(last_slash ? last_slash + 1 : zstr_cstr(&source_path));
+    } else {
+      if (result.type != ACTION_CANCEL) {
+          zstr_free(&result.path);
+      }
+      fprintf(stderr, "Cancelled.\n");
+      return zstr_init();
+    }
+  } else {
+    // Fuzzy matching
+    vec_TryEntry matches = vec_init(TryEntry);
+    DIR *d = opendir(tries_path);
+    if (d) {
+      struct dirent *dir;
+      while ((dir = readdir(d)) != NULL) {
+        if (dir->d_name[0] == '.') continue;
+        zstr full_path = join_path(tries_path, dir->d_name);
+        struct stat sb;
+        if (stat(zstr_cstr(&full_path), &sb) == 0 && S_ISDIR(sb.st_mode)) {
+          TryEntry entry = {0};
+          entry.name = zstr_from(dir->d_name);
+          entry.path = full_path;
+          entry.mtime = sb.st_mtime;
+          fuzzy_match(&entry, query);
+          if (entry.score > 0) {
+            vec_push_TryEntry(&matches, entry);
+          } else {
+            zstr_free(&entry.name);
+            zstr_free(&entry.path);
+          }
+        } else {
+          zstr_free(&full_path);
+        }
+      }
+      closedir(d);
+    }
+
+    if (matches.length == 1) {
+      source_path = zstr_dup(&matches.data[0].path);
+      source_name = zstr_dup(&matches.data[0].name);
+    } else if (matches.length > 1) {
+      // Ambiguous, use selector
+      SelectionResult result = run_selector(tries_path, query, "Select try to fork:", test);
+      if (result.type == ACTION_CD) {
+        source_path = result.path;
+        const char *last_slash = strrchr(zstr_cstr(&source_path), '/');
+        source_name = zstr_from(last_slash ? last_slash + 1 : zstr_cstr(&source_path));
+      } else {
+        if (result.type != ACTION_CANCEL) {
+            zstr_free(&result.path);
+        }
+        fprintf(stderr, "Cancelled.\n");
+        // Cleanup matches
+        for (size_t i = 0; i < matches.length; i++) {
+          zstr_free(&matches.data[i].name);
+          zstr_free(&matches.data[i].path);
+          zstr_free(&matches.data[i].rendered);
+        }
+        vec_free_TryEntry(&matches);
+        return zstr_init();
+      }
+    } else {
+      fprintf(stderr, "Error: No try found matching '%s'\n", query);
+      vec_free_TryEntry(&matches);
+      return zstr_init();
+    }
+
+    // Cleanup matches
+    for (size_t i = 0; i < matches.length; i++) {
+      zstr_free(&matches.data[i].name);
+      zstr_free(&matches.data[i].path);
+      zstr_free(&matches.data[i].rendered);
+    }
+    vec_free_TryEntry(&matches);
+  }
+
+  // Generate destination name
+  Z_CLEANUP(zstr_free) zstr fork_name = generate_fork_name(zstr_cstr(&source_name), tries_path);
+  Z_CLEANUP(zstr_free) zstr fork_path = join_path(tries_path, zstr_cstr(&fork_name));
+
+  fprintf(stderr, "Forking %s...\n", zstr_cstr(&source_name));
+
+  bool is_git = is_git_repo(zstr_cstr(&source_path));
+  int res = 0;
+
+  if (preserve_history && is_git) {
+    res = git_clone_local(zstr_cstr(&source_path), zstr_cstr(&fork_path));
+    if (res == 0) {
+      git_remove_remotes(zstr_cstr(&fork_path));
+      // Copy uncommitted/untracked changes
+      copy_directory(zstr_cstr(&source_path), zstr_cstr(&fork_path), true);
+    }
+  } else {
+    res = copy_directory(zstr_cstr(&source_path), zstr_cstr(&fork_path), true);
+    if (res == 0 && is_git) {
+      Z_CLEANUP(zstr_free) zstr msg = zstr_from("Fork from ");
+      zstr_cat(&msg, zstr_cstr(&source_name));
+      git_init_with_commit(zstr_cstr(&fork_path), zstr_cstr(&msg));
+      git_remove_remotes(zstr_cstr(&fork_path));
+    }
+  }
+
+  zstr_free(&source_path);
+  zstr_free(&source_name);
+
+  if (res != 0) {
+    fprintf(stderr, "Error: Fork failed\n");
+    return zstr_init();
+  }
+
+  fprintf(stderr, "Forked to %s\n", zstr_cstr(&fork_name));
+  return build_fork_script(zstr_cstr(&fork_path));
+}
+
+// ============================================================================
 // Route subcommands (for exec mode or main routing)
 // ============================================================================
 
-zstr cmd_route(int argc, char **argv, const char *tries_path, TestParams *test) {
+zstr cmd_route(int argc, char **argv, const char *tries_path, bool preserve_history, TestParams *test) {
   // No subcommand = interactive selector
   if (argc == 0) {
     return cmd_selector(0, NULL, tries_path, test);
@@ -530,13 +689,15 @@ zstr cmd_route(int argc, char **argv, const char *tries_path, TestParams *test) 
     extern bool tui_no_colors;
     tui_no_colors = true;
     // Continue with remaining args
-    return cmd_route(argc - 1, argv + 1, tries_path, test);
+    return cmd_route(argc - 1, argv + 1, tries_path, preserve_history, test);
   }
 
   if (strcmp(subcmd, "init") == 0) {
     // Init always prints directly
     cmd_init(argc - 1, argv + 1, tries_path);
     return zstr_init();
+  } else if (strcmp(subcmd, "fork") == 0 || strcmp(subcmd, "_fork") == 0) {
+    return cmd_fork(argc - 1, argv + 1, tries_path, preserve_history, test);
   } else if (strcmp(subcmd, "cd") == 0) {
     // Check if argument is a URL (clone shorthand)
     if (argc > 1 && (strncmp(argv[1], "https://", 8) == 0 ||

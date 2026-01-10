@@ -47,6 +47,6 @@ typedef struct {
 
 // Selector
 SelectionResult run_selector(const char *base_path, const char *initial_filter,
-                             TestParams *test);
+                             const char *custom_prompt, TestParams *test);
 
 #endif /* TUI_H */

@@ -11,7 +11,7 @@ DIST_DIR = dist
 BIN = $(DIST_DIR)/try
 
 SRCS = $(wildcard $(SRC_DIR)/*.c)
-OBJS = obj/commands.o obj/main.o obj/terminal.o obj/tui.o obj/tui_style.o obj/utils.o obj/fuzzy.o
+OBJS = obj/commands.o obj/main.o obj/terminal.o obj/tui.o obj/tui_style.o obj/utils.o obj/fuzzy.o obj/git.o
 
 all: $(BIN)
 
