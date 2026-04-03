@@ -24,7 +24,10 @@ typedef enum {
 typedef struct {
   zstr path;
   zstr name;
+  zstr name_lower;
   zstr rendered;
+  size_t name_len;
+  bool has_date_prefix;
   time_t mtime;
   float score;
   bool marked_for_delete;

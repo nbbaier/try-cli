@@ -66,6 +66,7 @@ static void handle_winch(int sig) {
 static void free_entry(TryEntry *entry) {
   zstr_free(&entry->path);
   zstr_free(&entry->name);
+  zstr_free(&entry->name_lower);
   zstr_free(&entry->rendered);
 }
 
@@ -113,10 +114,11 @@ static void scan_tries(const char *base_path) {
       TryEntry entry = {0};
       entry.path = full_path; // Move ownership
       entry.name = zstr_from(dir->d_name);
+      entry.name_lower = zstr_init();
       entry.mtime = sb.st_mtime;
-      // Initial render = name (no highlighting)
-      entry.rendered = zstr_dup(&entry.name);
+      entry.rendered = zstr_init();
       entry.score = 0; // Will be calculated in filter
+      fuzzy_prepare_entry(&entry);
 
       vec_push_TryEntry(&all_tries, entry);
     } else {
@@ -128,14 +130,26 @@ static void scan_tries(const char *base_path) {
 
 static void filter_tries(void) {
   vec_clear_TryEntryPtr(&filtered_ptrs);
-  const char *query = zstr_cstr(&filter_input.text);
+  Z_CLEANUP(zstr_free) zstr query_lower = zstr_dup(&filter_input.text);
+  if (zstr_len(&query_lower) > 0) {
+    char *query_data = zstr_data(&query_lower);
+    for (size_t i = 0; i < zstr_len(&query_lower); i++) {
+      query_data[i] = (char)tolower((unsigned char)query_data[i]);
+    }
+  }
+
+  FuzzyMatchContext ctx = {
+      .query_lower = zstr_cstr(&query_lower),
+      .query_len = (int)zstr_len(&query_lower),
+      .now = time(NULL),
+  };
 
   TryEntry *iter;
   vec_foreach(&all_tries, iter) {
     TryEntry *entry = iter;
 
     // Update score and rendered string
-    fuzzy_match(entry, query);
+    fuzzy_match_with_context(entry, &ctx);
 
     if (zstr_len(&filter_input.text) > 0 && entry->score <= 0.0) {
       continue;

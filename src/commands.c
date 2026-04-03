@@ -571,14 +571,19 @@ zstr cmd_fork(int argc, char **argv, const char *tries_path, bool preserve_histo
         if (stat(zstr_cstr(&full_path), &sb) == 0 && S_ISDIR(sb.st_mode)) {
           TryEntry entry = {0};
           entry.name = zstr_from(dir->d_name);
+          entry.name_lower = zstr_init();
           entry.path = full_path;
+          entry.rendered = zstr_init();
           entry.mtime = sb.st_mtime;
+          fuzzy_prepare_entry(&entry);
           fuzzy_match(&entry, query);
           if (entry.score > 0) {
             vec_push_TryEntry(&matches, entry);
           } else {
             zstr_free(&entry.name);
+            zstr_free(&entry.name_lower);
             zstr_free(&entry.path);
+            zstr_free(&entry.rendered);
           }
         } else {
           zstr_free(&full_path);
@@ -605,6 +610,7 @@ zstr cmd_fork(int argc, char **argv, const char *tries_path, bool preserve_histo
         // Cleanup matches
         for (size_t i = 0; i < matches.length; i++) {
           zstr_free(&matches.data[i].name);
+          zstr_free(&matches.data[i].name_lower);
           zstr_free(&matches.data[i].path);
           zstr_free(&matches.data[i].rendered);
         }
@@ -620,6 +626,7 @@ zstr cmd_fork(int argc, char **argv, const char *tries_path, bool preserve_histo
     // Cleanup matches
     for (size_t i = 0; i < matches.length; i++) {
       zstr_free(&matches.data[i].name);
+      zstr_free(&matches.data[i].name_lower);
       zstr_free(&matches.data[i].path);
       zstr_free(&matches.data[i].rendered);
     }

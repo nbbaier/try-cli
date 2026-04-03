@@ -2,7 +2,8 @@ VERSION := $(shell cat VERSION 2>/dev/null || echo "dev")
 
 CC ?= gcc
 CFLAGS += -Wall -Wextra -Werror -Wpedantic -Wshadow -Wstrict-prototypes \
-          -Wno-unused-function -std=c11 -Isrc/libs -DTRY_VERSION=\"$(VERSION)\"
+          -Wno-unused-function -O2 -DNDEBUG -std=c11 -Isrc/libs \
+          -DTRY_VERSION=\"$(VERSION)\"
 LDFLAGS ?=
 
 SRC_DIR = src
